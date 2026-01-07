@@ -485,7 +485,7 @@ let selectedItemId = null;
 // ========== LOAD DATA ==========
 async function loadData() {
     try {
-        const response = await fetch('https://cdn.jsdelivr.net/gh/windlyu12/newhomes-tool@main/data/data.json');
+        const response = await fetch('https://raw.githubusercontent.com/windlyu12/newhomes-tool/main/data/data.json');
         if (!response.ok) throw new Error('Không tải được data.json');
         DATA = await response.json();
         BACKUP = JSON.parse(JSON.stringify(DATA)); // Deep clone for backup
