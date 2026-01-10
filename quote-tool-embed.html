@@ -1118,10 +1118,10 @@ function submitLead() {
     };
     
     console.log('Lead submitted:', leadData);
-    
-    // TODO: Gửi webhook nếu cấu hình
-    // if (s.webhookUrl) { fetch(s.webhookUrl, { method: 'POST', body: JSON.stringify(leadData) }) }
-    
+
+    // Send lead to Google Sheets webhook if configured
+    sendLeadToGoogleSheets(leadData);
+
     alert(`Cảm ơn ${name}!\nChúng tôi sẽ liên hệ qua SĐT ${phone} trong thời gian sớm nhất.`);
     
     // Mở Zalo để chat trực tiếp
