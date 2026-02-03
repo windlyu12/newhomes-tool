@@ -31,6 +31,7 @@
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     
     <style>
         /* ========== CSS VARIABLES (copy từ website) ========== */
@@ -884,10 +885,11 @@
                         <input type="text" class="form-input" id="saveName" placeholder="VD: Căn S1.05 - Anh Nam">
                     </div>
                     <button class="action-btn" onclick="saveQuote()" style="margin-bottom:8px">💾 Lưu báo giá mới</button>
-                    
+
                     <div style="margin-top:20px">
                         <label class="form-label">Báo giá đã lưu</label>
                         <div id="savedList" class="saved-list"></div>
+                        <button class="action-btn secondary-btn" onclick="exportAllQuotesToExcel()" style="margin-top:12px;width:100%">📊 Xuất tất cả ra Excel</button>
                     </div>
                 </div>
             </div>
@@ -1021,6 +1023,7 @@
                     <div style="display:flex;gap:8px">
                         <button class="action-btn secondary-btn" style="flex:1" onclick="exportImage()">🖼️ JPG</button>
                         <button class="action-btn secondary-btn" style="flex:1" onclick="exportPDF()">📄 PDF</button>
+                        <button class="action-btn secondary-btn" style="flex:1" onclick="exportExcel()">📊 Excel</button>
                         <button class="action-btn secondary-btn" style="flex:1" onclick="printQuote()">🖨️ In</button>
                     </div>
                 </div>
@@ -1067,6 +1070,7 @@
                         <div class="sidebar-btn-row">
                             <button class="sidebar-btn secondary" onclick="exportImage()">🖼️</button>
                             <button class="sidebar-btn secondary" onclick="exportPDF()">📄</button>
+                            <button class="sidebar-btn secondary" onclick="exportExcel()">📊</button>
                             <button class="sidebar-btn secondary" onclick="printQuote()">🖨️</button>
                         </div>
                         <button class="sidebar-btn secondary" onclick="showSaveMenu()">💾 Lưu / Tải báo giá</button>
@@ -2393,6 +2397,7 @@ function doExport() {
     if (type === 'jpg') _doExportImage();
     else if (type === 'pdf') _doExportPDF();
     else if (type === 'print') _doPrintQuote();
+    else if (type === 'excel') _doExportExcel();
 }
 
 function sendLeadToGoogleSheets(data) {
@@ -2405,6 +2410,213 @@ function sendLeadToGoogleSheets(data) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
     }).catch(err => console.error('Lead error:', err));
+}
+
+// ========== EXCEL EXPORT ==========
+function buildQuoteDataRows(quoteState) {
+    const st = quoteState || state;
+    const aptType = DATA.apartmentTypes[st.apartmentType]?.name || '';
+    const matName = DATA.materials[st.mat]?.name || '';
+    const rows = [];
+    let stt = 0;
+
+    DATA.categories.forEach(cat => {
+        if (cat.requireRenovation && !st.hasRen) return;
+        if (cat.isAccessories) return;
+
+        cat.items?.forEach(item => {
+            if (item.hide && item.hide.includes(st.apartmentType)) return;
+            if (item.only && !item.only.includes(st.apartmentType)) return;
+
+            const s = st.items[item.id];
+            if (s && s.chk && s.qty > 0) {
+                stt++;
+                const price = getPrice(item, s);
+                const total = price * s.qty;
+
+                let itemMat = '';
+                if (item.optionType && DATA.options[item.optionType]) {
+                    const optKey = s[item.optionType];
+                    const optItems = DATA.options[item.optionType]?.items || {};
+                    itemMat = optItems[optKey]?.name || '';
+                } else if (item.prices && item.prices.thai && item.prices.vanchai && item.prices.ancuong) {
+                    itemMat = matName;
+                }
+
+                rows.push({
+                    stt: stt,
+                    category: cat.name,
+                    name: item.name,
+                    material: itemMat,
+                    unit: item.unit,
+                    qty: s.qty,
+                    price: price,
+                    total: total
+                });
+            }
+        });
+    });
+
+    // Accessories
+    const oldState = state;
+    if (quoteState) Object.assign(state, quoteState);
+    const acc = calcAcc();
+    if (quoteState) Object.assign(state, oldState);
+
+    if (acc.total > 0) {
+        if (acc.bl.q > 0) {
+            stt++;
+            rows.push({ stt, category: 'Phụ kiện', name: 'Bản lề ' + acc.name, material: acc.name, unit: 'cái', qty: acc.bl.q, price: acc.bl.p, total: acc.bl.t });
+        }
+        if (acc.rb.q > 0) {
+            stt++;
+            rows.push({ stt, category: 'Phụ kiện', name: 'Ray bi ' + acc.name, material: acc.name, unit: 'bộ', qty: acc.rb.q, price: acc.rb.p, total: acc.rb.t });
+        }
+        if (acc.pt.q > 0) {
+            stt++;
+            rows.push({ stt, category: 'Phụ kiện', name: 'Pittong ' + acc.name, material: acc.name, unit: 'cái', qty: acc.pt.q, price: acc.pt.p, total: acc.pt.t });
+        }
+        if (acc.nguon.q > 0) {
+            stt++;
+            rows.push({ stt, category: 'Phụ kiện', name: 'Nguồn LED', material: '', unit: 'bộ', qty: acc.nguon.q, price: acc.nguon.p, total: acc.nguon.t });
+        }
+    }
+
+    return rows;
+}
+
+function exportExcel() {
+    pendingExportType = 'excel';
+    document.getElementById('leadModal').style.display = 'flex';
+}
+
+function _doExportExcel() {
+    const aptName = state.aptName || 'Chua dat ten';
+    const aptType = DATA.apartmentTypes[state.apartmentType]?.name || '';
+    const matName = DATA.materials[state.mat]?.name || '';
+    const grandTotal = calcTotal();
+    const today = new Date().toLocaleDateString('vi-VN');
+    const quoteNum = generateQuoteNumber();
+    const s = getSettings();
+    const c = s.company || {};
+
+    const rows = buildQuoteDataRows();
+
+    // Build worksheet data
+    const wsData = [];
+
+    // Header rows
+    wsData.push([c.name || 'New Homes Interior']);
+    wsData.push(['Địa chỉ: ' + (c.address || '')]);
+    wsData.push(['Hotline: ' + (c.hotline || '') + ' | Email: ' + (c.email || '')]);
+    wsData.push([]);
+    wsData.push(['BÁO GIÁ NỘI THẤT']);
+    wsData.push(['Số báo giá: ' + quoteNum, '', '', 'Ngày: ' + today]);
+    wsData.push(['Căn hộ: ' + aptName, '', '', 'Loại căn: ' + aptType]);
+    wsData.push(['Vật liệu chính: ' + matName]);
+    wsData.push([]);
+
+    // Table header
+    wsData.push(['STT', 'Hạng mục', 'Tên sản phẩm', 'Vật liệu', 'ĐVT', 'Số lượng', 'Đơn giá (VNĐ)', 'Thành tiền (VNĐ)']);
+
+    // Data rows
+    rows.forEach(r => {
+        wsData.push([r.stt, r.category, r.name, r.material, r.unit, r.qty, r.price, r.total]);
+    });
+
+    // Total row
+    wsData.push([]);
+    wsData.push(['', '', '', '', '', '', 'TỔNG CỘNG:', grandTotal]);
+
+    // Create workbook
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+    // Column widths
+    ws['!cols'] = [
+        { wch: 5 },   // STT
+        { wch: 16 },  // Hạng mục
+        { wch: 30 },  // Tên sản phẩm
+        { wch: 22 },  // Vật liệu
+        { wch: 8 },   // ĐVT
+        { wch: 10 },  // Số lượng
+        { wch: 18 },  // Đơn giá
+        { wch: 18 },  // Thành tiền
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Báo giá');
+
+    const fileName = 'BaoGia_' + (aptName.replace(/[^a-zA-Z0-9_\u00C0-\u024F\u1E00-\u1EFF]/g, '_')) + '_' + today.replace(/\//g, '-') + '.xlsx';
+    XLSX.writeFile(wb, fileName);
+}
+
+function exportAllQuotesToExcel() {
+    const quotes = getSavedQuotes();
+    if (quotes.length === 0) {
+        alert('Chưa có báo giá nào được lưu');
+        return;
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Summary
+    const summaryData = [];
+    summaryData.push(['TỔNG HỢP TẤT CẢ BÁO GIÁ']);
+    summaryData.push(['Ngày xuất: ' + new Date().toLocaleDateString('vi-VN')]);
+    summaryData.push([]);
+    summaryData.push(['STT', 'Tên báo giá', 'Loại căn hộ', 'Vật liệu', 'Tổng tiền (VNĐ)', 'Ngày tạo']);
+
+    quotes.forEach((q, i) => {
+        summaryData.push([i + 1, q.name, q.aptType, q.matName, q.total, q.date]);
+    });
+
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+    wsSummary['!cols'] = [
+        { wch: 5 },
+        { wch: 30 },
+        { wch: 18 },
+        { wch: 22 },
+        { wch: 20 },
+        { wch: 15 },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Tổng hợp');
+
+    // Sheet per quote: detailed items
+    const savedState = JSON.parse(JSON.stringify(state));
+
+    quotes.forEach((q, i) => {
+        Object.assign(state, q.state);
+
+        const rows = buildQuoteDataRows(q.state);
+        const wsData = [];
+        wsData.push(['Báo giá: ' + q.name]);
+        wsData.push(['Loại căn: ' + q.aptType, '', 'Vật liệu: ' + q.matName, '', 'Ngày: ' + q.date]);
+        wsData.push([]);
+        wsData.push(['STT', 'Hạng mục', 'Tên sản phẩm', 'Vật liệu', 'ĐVT', 'Số lượng', 'Đơn giá (VNĐ)', 'Thành tiền (VNĐ)']);
+
+        rows.forEach(r => {
+            wsData.push([r.stt, r.category, r.name, r.material, r.unit, r.qty, r.price, r.total]);
+        });
+
+        wsData.push([]);
+        wsData.push(['', '', '', '', '', '', 'TỔNG CỘNG:', q.total]);
+
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        ws['!cols'] = [
+            { wch: 5 }, { wch: 16 }, { wch: 30 }, { wch: 22 }, { wch: 8 }, { wch: 10 }, { wch: 18 }, { wch: 18 }
+        ];
+
+        // Sheet name max 31 chars
+        let sheetName = (i + 1) + '. ' + q.name;
+        sheetName = sheetName.replace(/[\\\/\?\*\[\]]/g, '').substring(0, 31);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    });
+
+    // Restore state
+    Object.assign(state, savedState);
+
+    const fileName = 'TatCa_BaoGia_' + new Date().toLocaleDateString('vi-VN').replace(/\//g, '-') + '.xlsx';
+    XLSX.writeFile(wb, fileName);
 }
 
 // ========== START ==========
